@@ -4,13 +4,17 @@ import { useEffect } from 'react'
 
 const HEADER_OFFSET = 84
 
-function isSamePageHashLink(anchor: HTMLAnchorElement) {
+type ScrollMode = 'auto' | 'smooth'
+
+function getInternalHash(anchor: HTMLAnchorElement) {
   const href = anchor.getAttribute('href')
-  return Boolean(href?.startsWith('#') && href.length > 1)
+  if (!href || !href.startsWith('#') || href === '#') return null
+  return href
 }
 
-function scrollToHash(hash: string, behavior: ScrollBehavior) {
-  const target = document.getElementById(decodeURIComponent(hash.slice(1)))
+function scrollToHash(hash: string, behavior: ScrollMode) {
+  const id = decodeURIComponent(hash.slice(1))
+  const target = document.getElementById(id)
   if (!target) return false
 
   const top = Math.max(0, target.getBoundingClientRect().top + window.scrollY - HEADER_OFFSET)
@@ -18,31 +22,47 @@ function scrollToHash(hash: string, behavior: ScrollBehavior) {
   return true
 }
 
+function scrollAfterLayout(hash: string, behavior: ScrollMode) {
+  let frame = 0
+  let attempts = 0
+
+  const tryScroll = () => {
+    attempts += 1
+    if (scrollToHash(hash, behavior) || attempts >= 4) return
+    frame = window.requestAnimationFrame(tryScroll)
+  }
+
+  frame = window.requestAnimationFrame(tryScroll)
+  return () => window.cancelAnimationFrame(frame)
+}
+
 export function HashNavigation() {
   useEffect(() => {
-    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
-    const getBehavior = () => prefersReducedMotion.matches ? 'auto' : 'smooth'
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const behavior = (): ScrollMode => reducedMotion.matches ? 'auto' : 'smooth'
 
     const handleClick = (event: MouseEvent) => {
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
       const anchor = (event.target as Element | null)?.closest<HTMLAnchorElement>('a')
-      if (!anchor || !isSamePageHashLink(anchor)) return
-      const hash = anchor.getAttribute('href')!
-      if (!scrollToHash(hash, getBehavior())) return
+      const hash = anchor ? getInternalHash(anchor) : null
+      if (!hash) return
+
       event.preventDefault()
       window.history.pushState(null, '', hash)
+      scrollAfterLayout(hash, behavior())
     }
 
     const handleHashChange = () => {
-      window.requestAnimationFrame(() => scrollToHash(window.location.hash, getBehavior()))
+      scrollAfterLayout(window.location.hash, behavior())
     }
 
-    document.addEventListener('click', handleClick)
+    document.addEventListener('click', handleClick, true)
     window.addEventListener('hashchange', handleHashChange)
-    if (window.location.hash) window.requestAnimationFrame(() => scrollToHash(window.location.hash, 'auto'))
+    const cancelInitialScroll = window.location.hash ? scrollAfterLayout(window.location.hash, 'auto') : undefined
 
     return () => {
-      document.removeEventListener('click', handleClick)
+      cancelInitialScroll?.()
+      document.removeEventListener('click', handleClick, true)
       window.removeEventListener('hashchange', handleHashChange)
     }
   }, [])
